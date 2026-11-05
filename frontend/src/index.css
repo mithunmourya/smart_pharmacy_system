@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+@theme {
+  /* Backgrounds */
+  --color-background: #242424;
+  --color-surface: #2C2C2C;
+  --color-surface-hover: #363636;
+
+  /* Primary */
+  --color-primary: #2563EB;
+  --color-primary-hover: #1D4ED8;
+
+  /* Status */
+  --color-success: #22C55E;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-info: #06B6D4;
+
+  /* Text */
+  --color-text-primary: #F9FAFB;
+  --color-text-secondary: #9CA3AF;
+  --color-text-muted: #6B7280;
+
+  /* Border */
+  --color-border: #404040;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    min-width: 320px;
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  #root {
+    min-height: 100dvh;
+  }
+}
+
+/* Dashboard colors shared by all roles */
+.dashboard-theme {
+  --color-text-primary: #f8fafc;
+  --color-text-secondary: #b3bdcf;
+  --color-text-muted: #8995ab;
+
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  color-scheme: dark;
+}
+
+/* Admin: midnight violet */
+.dashboard-theme[data-role="Admin"] {
+  --color-background: #13111c;
+  --color-surface: #1d192b;
+  --color-surface-hover: #29223c;
+  --color-primary: #7c3aed;
+  --color-primary-hover: #6d28d9;
+  --color-border: #39304c;
+
+  --dashboard-accent: #c4b5fd;
+  --dashboard-soft: #2d2146;
+  --dashboard-hero: #30204b;
+}
+
+/* Pharmacist: deep teal */
+.dashboard-theme[data-role="Pharmacist"] {
+  --color-background: #0d191b;
+  --color-surface: #142629;
+  --color-surface-hover: #1d3539;
+  --color-primary: #0f766e;
+  --color-primary-hover: #115e59;
+  --color-border: #2b4549;
+
+  --dashboard-accent: #5eead4;
+  --dashboard-soft: #183b39;
+  --dashboard-hero: #15413e;
+}
+
+/* Customer: dark navy */
+.dashboard-theme[data-role="Customer"] {
+  --color-background: #101827;
+  --color-surface: #192438;
+  --color-surface-hover: #22324a;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-border: #33435d;
+
+  --dashboard-accent: #93c5fd;
+  --dashboard-soft: #1d3558;
+  --dashboard-hero: #203e68;
+}
+.dashboard-accent {
+  color: var(--color-text-primary);
+}
+
+.dashboard-soft {
+  background-color: var(--color-surface-hover);
+}
+
+.dashboard-hero {
+  background-color: var(--color-surface);
+}
