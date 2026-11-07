@@ -1,0 +1,251 @@
+
+name: Frontend and E2E CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ci.yml"
+
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ci.yml"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ==========================================
+  # JOB 1 — FRONTEND VITEST AND BUILD
+  # ==========================================
+
+  frontend:
+    name: Vitest and Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run Vitest tests
+        run: npx --no-install vitest run
+
+      - name: Build frontend
+        run: npm run build
+
+  # ==========================================
+  # JOB 2 — PLAYWRIGHT E2E WITH REAL MYSQL
+  # ==========================================
+
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    services:
+      mysql:
+        image: mysql:8.0
+
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_password
+          MYSQL_DATABASE: smart_pharmacy_e2e
+          MYSQL_USER: pharmacy_e2e
+          MYSQL_PASSWORD: ci_e2e_password
+
+        ports:
+          - 3306:3306
+
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      CI: "true"
+      NODE_ENV: test
+      PORT: "5000"
+
+      DB_HOST: 127.0.0.1
+      DB_USER: pharmacy_e2e
+      DB_PASSWORD: ci_e2e_password
+      DB_NAME: smart_pharmacy_e2e
+
+      MYSQL_PWD: ci_e2e_password
+
+      JWT_SECRET: ci-e2e-jwt-secret-for-temporary-runners
+      JWT_EXPIRES_IN: 1h
+
+      E2E_API_BASE_URL: http://127.0.0.1:5000
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Chromium and Linux dependencies
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # ---------------------------------------
+      # PREPARE ISOLATED MYSQL DATABASE
+      # ---------------------------------------
+
+      - name: Import pharmacy database schema
+        run: |
+          test "$DB_NAME" = smart_pharmacy_e2e
+
+          mysql -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" < backend/smart_pharmacy_schema.sql
+
+          mysql -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" -e "SHOW FULL TABLES;"
+
+      # ---------------------------------------
+      # GENERATE TEMPORARY TEST CREDENTIALS
+      # ---------------------------------------
+
+      - name: Generate E2E account credentials
+        shell: bash
+        run: |
+          for role in ADMIN PHARMACIST CUSTOMER; do
+            email="ci-${role,,}@example.invalid"
+            password="$(openssl rand -hex 20)"
+
+            echo "::add-mask::$password"
+            echo "E2E_${role}_EMAIL=$email" >> "$GITHUB_ENV"
+            echo "E2E_${role}_PASSWORD=$password" >> "$GITHUB_ENV"
+          done
+
+      # ---------------------------------------
+      # CREATE TEST USERS DIRECTLY IN MYSQL
+      # ---------------------------------------
+
+      - name: Seed Admin Pharmacist and Customer
+        working-directory: backend
+        run: |
+          node <<'NODE'
+          const mysql = require('mysql2/promise');
+          const bcrypt = require('bcrypt');
+
+          (async () => {
+            const db = await mysql.createConnection({
+              host: process.env.DB_HOST,
+              user: process.env.DB_USER,
+              password: process.env.DB_PASSWORD,
+              database: process.env.DB_NAME
+            });
+
+            try {
+              for (const role of ['Admin', 'Pharmacist', 'Customer']) {
+                const upper = role.toUpperCase();
+
+                const email = process.env[`E2E_${upper}_EMAIL`];
+                const password = process.env[`E2E_${upper}_PASSWORD`];
+
+                if (!email || !password) {
+                  throw new Error(`Missing ${role} E2E credentials`);
+                }
+
+                const hash = await bcrypt.hash(password, 10);
+
+                await db.execute(
+                  'INSERT INTO users (name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, 1)',
+                  [`CI ${role}`, email, hash, role]
+                );
+              }
+
+              console.log('Seeded three temporary CI accounts.');
+            } finally {
+              await db.end();
+            }
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      # ---------------------------------------
+      # START EXPRESS BACKEND
+      # ---------------------------------------
+
+      - name: Start Express API
+        working-directory: backend
+        run: |
+          nohup npm start > "$RUNNER_TEMP/backend.log" 2>&1 &
+
+      - name: Wait for Express API
+        run: |
+          for i in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:5000/ > /dev/null; then
+              echo "Express API is ready"
+              exit 0
+            fi
+
+            sleep 2
+          done
+
+          cat "$RUNNER_TEMP/backend.log"
+          exit 1
+
+      # ---------------------------------------
+      # RUN COMPLETE PLAYWRIGHT SUITE
+      # ---------------------------------------
+
+      - name: Run all Playwright E2E tests
+        working-directory: frontend
+        run: npx playwright test --workers=2 --reporter=dot,html
+
+      # ---------------------------------------
+      # UPLOAD TEST RESULTS
+      # ---------------------------------------
+
+      - name: Upload Playwright report and traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-e2e-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+
+      - name: Show API logs on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/backend.log" || true
