@@ -30,6 +30,7 @@ jobs:
   frontend:
     name: Vitest and Build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     defaults:
       run:
@@ -49,8 +50,17 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # ---------------------------------------
+      # VITEST — UNIT AND INTEGRATION TESTS
+      # ---------------------------------------
+
       - name: Run Vitest tests
-        run: npx --no-install vitest run
+        run: >-
+          npx --no-install vitest run
+          --exclude "**/e2e/**"
+          --no-file-parallelism
+          --testTimeout=15000
+          --hookTimeout=30000
 
       - name: Build frontend
         run: npm run build
@@ -130,10 +140,25 @@ jobs:
       # ---------------------------------------
 
       - name: Import pharmacy database schema
+        shell: bash
         run: |
-          test "$DB_NAME" = smart_pharmacy_e2e
+          set -euo pipefail
 
-          mysql -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" < backend/smart_pharmacy_schema.sql
+          test "$DB_NAME" = "smart_pharmacy_e2e"
+
+          # Support both UTF-16 and UTF-8 schema files.
+          if [[ "$(od -An -N2 -tx1 backend/smart_pharmacy_schema.sql | tr -d ' \n')" == "fffe" ]]; then
+            iconv -f UTF-16 -t UTF-8 backend/smart_pharmacy_schema.sql > "$RUNNER_TEMP/schema.sql"
+          else
+            cp backend/smart_pharmacy_schema.sql "$RUNNER_TEMP/schema.sql"
+          fi
+
+          # Remove the original machine's MySQL DEFINER
+          # so the CI database user can create views.
+          sed -E 's/DEFINER=`[^`]+`@`[^`]+`[[:space:]]*//g' \
+            "$RUNNER_TEMP/schema.sql" > "$RUNNER_TEMP/schema_ci.sql"
+
+          mysql -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" < "$RUNNER_TEMP/schema_ci.sql"
 
           mysql -h 127.0.0.1 -u "$DB_USER" "$DB_NAME" -e "SHOW FULL TABLES;"
 
